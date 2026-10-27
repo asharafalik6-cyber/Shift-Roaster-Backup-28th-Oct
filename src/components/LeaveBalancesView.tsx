@@ -14,6 +14,8 @@ import {
   ArrowUpDown,
   Lock,
   ShieldCheck,
+  RefreshCw,
+  Sparkles,
 } from 'lucide-react';
 
 interface LeaveBalancesViewProps {
@@ -24,6 +26,7 @@ interface LeaveBalancesViewProps {
   onOpenLogModal: (empId?: string) => void;
   userRole?: UserRole;
   onOpenAdminModal?: () => void;
+  onSyncAllBalances?: () => void;
 }
 
 export const LeaveBalancesView: React.FC<LeaveBalancesViewProps> = ({
@@ -34,6 +37,7 @@ export const LeaveBalancesView: React.FC<LeaveBalancesViewProps> = ({
   onOpenLogModal,
   userRole = 'admin',
   onOpenAdminModal,
+  onSyncAllBalances,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'negative_co' | 'low_pl' | 'high_consumer'>('all');
@@ -183,6 +187,25 @@ export const LeaveBalancesView: React.FC<LeaveBalancesViewProps> = ({
             </div>
 
             {/* Actions */}
+            {onSyncAllBalances && (
+              <button
+                onClick={userRole === 'admin' ? onSyncAllBalances : onOpenAdminModal}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors shadow-xs whitespace-nowrap cursor-pointer ${
+                  userRole === 'admin'
+                    ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'text-slate-500 bg-slate-100/80 border border-slate-200/80 hover:border-amber-400'
+                }`}
+                title={userRole === 'admin' ? 'Recalculate and synchronize all leave quotas with schedule cells across 2026' : 'Admin only: Unlock to sync'}
+              >
+                {userRole === 'admin' ? (
+                  <RefreshCw className="w-3.5 h-3.5 text-emerald-600" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5 text-amber-600" />
+                )}
+                <span>Sync Leaves from Schedule</span>
+              </button>
+            )}
+
             <button
               onClick={userRole === 'admin' ? () => exportBalancesToCSV(year, balances) : onOpenAdminModal}
               disabled={userRole !== 'admin'}

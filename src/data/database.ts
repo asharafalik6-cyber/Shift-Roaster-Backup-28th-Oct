@@ -212,9 +212,77 @@ export function saveDatabase(db: DatabaseState): void {
   }
 }
 
+const DB_BACKUP_KEY = 'kaseya_noc_database_backup_pre_import_v2';
+
+export interface DatabaseBackup {
+  state: DatabaseState;
+  timestamp: number;
+  formattedTime: string;
+  note: string;
+  employeeCount: number;
+}
+
+export function saveDatabaseBackup(db: DatabaseState, note = 'Automatic snapshot before import'): void {
+  try {
+    const backup: DatabaseBackup = {
+      state: JSON.parse(JSON.stringify(db)),
+      timestamp: Date.now(),
+      formattedTime: new Date().toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      }),
+      note,
+      employeeCount: db.balances.length,
+    };
+    localStorage.setItem(DB_BACKUP_KEY, JSON.stringify(backup));
+  } catch (e) {
+    console.error('Failed to create database backup', e);
+  }
+}
+
+export function getDatabaseBackup(): DatabaseBackup | null {
+  try {
+    const raw = localStorage.getItem(DB_BACKUP_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.state && parsed.state.balances) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to read database backup', e);
+  }
+  return null;
+}
+
+export function restoreDatabaseBackup(): DatabaseState | null {
+  try {
+    const backup = getDatabaseBackup();
+    if (backup && backup.state) {
+      saveDatabase(backup.state);
+      localStorage.removeItem(DB_BACKUP_KEY);
+      return backup.state;
+    }
+  } catch (e) {
+    console.error('Failed to restore database backup', e);
+  }
+  return null;
+}
+
+export function clearDatabaseBackup(): void {
+  try {
+    localStorage.removeItem(DB_BACKUP_KEY);
+  } catch (e) {
+    console.error('Failed to clear backup', e);
+  }
+}
+
 // Reset database back to pristine master CSV
 export function resetDatabase(): DatabaseState {
   localStorage.removeItem(DB_STORAGE_KEY);
+  localStorage.removeItem(DB_BACKUP_KEY);
   const fresh = parseRosterCsv(MASTER_ROSTER_CSV);
   saveDatabase(fresh);
   return fresh;

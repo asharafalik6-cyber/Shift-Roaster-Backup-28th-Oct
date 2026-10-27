@@ -18,9 +18,16 @@ import {
   getMonthRosterRows,
   exportDatabaseToCSV,
   DatabaseState,
+  saveDatabaseBackup,
+  getDatabaseBackup,
+  restoreDatabaseBackup,
+  DatabaseBackup,
 } from './data/database';
 import { calculateEmployeeBalance } from './utils/rosterUtils';
+import { synchronizeLeaveBalances } from './utils/rosterFileParser';
+import { RotateCcw } from 'lucide-react';
 import { Navbar } from './components/Navbar';
+import { PageActionBar } from './components/PageActionBar';
 import { DashboardView } from './components/DashboardView';
 import { RosterGridView } from './components/RosterGridView';
 import { LeaveBalancesView } from './components/LeaveBalancesView';
@@ -68,6 +75,8 @@ export default function App() {
 
   // Master Database State (Holds all 365 days of schedules and leave balances for all 28 employees)
   const [db, setDb] = useState<DatabaseState>(() => loadDatabase());
+  // Database backup state for Undo capability
+  const [backupInfo, setBackupInfo] = useState<DatabaseBackup | null>(() => getDatabaseBackup());
 
   // Derive Roster Rows for currently active month from database
   const rosterRows = useMemo(() => {
@@ -215,16 +224,57 @@ export default function App() {
     );
   };
 
-  // 5. Apply newly imported CSV
-  const handleImportSuccess = (importedState: DatabaseState) => {
+  // 5. Apply newly imported Excel / CSV data
+  const handleImportSuccess = (importedState: DatabaseState, targetMonth?: number) => {
     if (userRole === 'viewer') {
       setIsAdminModalOpen(true);
       return;
     }
+    // Save database backup snapshot before applying import so user can undo anytime!
+    saveDatabaseBackup(db, `Snapshot before import at ${new Date().toLocaleTimeString()}`);
+    setBackupInfo(getDatabaseBackup());
+
     setDb(importedState);
     saveDatabase(importedState);
+    if (targetMonth && targetMonth >= 1 && targetMonth <= 12) {
+      setMonth(targetMonth);
+    }
     showToast(
-      `Successfully loaded and synchronized ${importedState.balances.length} team members into database!`
+      `Successfully synchronized ${importedState.balances.length} team members! Undo snapshot saved.`
+    );
+  };
+
+  // 6. Undo last import and revert to previous database snapshot
+  const handleUndoImport = () => {
+    if (userRole === 'viewer') {
+      setIsAdminModalOpen(true);
+      return;
+    }
+    const previous = restoreDatabaseBackup();
+    if (!previous) {
+      showToast('No previous database backup available to restore.');
+      return;
+    }
+    setDb(previous);
+    setBackupInfo(null);
+    showToast('Undo completed: Reverted database to state before last import!');
+  };
+
+  // 7. Synchronize all leave balances with daily schedules
+  const handleSyncAllBalances = () => {
+    if (userRole === 'viewer') {
+      setIsAdminModalOpen(true);
+      return;
+    }
+    const syncRes = synchronizeLeaveBalances(db.balances, db.dailySchedules);
+    const newDb: DatabaseState = {
+      ...db,
+      balances: syncRes.syncedBalances,
+    };
+    setDb(newDb);
+    saveDatabase(newDb);
+    showToast(
+      `Synchronized leave balances from all schedules! (${syncRes.summaryChanges.length} quotas updated)`
     );
   };
 
@@ -266,43 +316,12 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50/70 via-slate-50 to-blue-50/50 text-slate-900 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
-      {/* Navbar with 3-Zone Top Bar Contract, Month Selector, and CSV Database Tools */}
+    <div className="min-h-screen w-full overflow-x-hidden bg-gradient-to-b from-blue-50/70 via-slate-50 to-blue-50/50 text-slate-900 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+      {/* Sleek, uncrowded Navbar with brand, navigation, and role security */}
       <Navbar
         currentTab={currentTab}
         onTabChange={setCurrentTab}
-        onOpenLogModal={() => handleOpenAddModal()}
         year={year}
-        month={month}
-        onMonthChange={(m) => {
-          setMonth(m);
-          const istNow = getISTDate();
-          if (m === istNow.month) {
-            setSelectedDay(istNow.day);
-          } else {
-            setSelectedDay(1);
-          }
-        }}
-        onJumpToToday={() => {
-          const istNow = getISTDate();
-          setMonth(istNow.month);
-          setSelectedDay(istNow.day);
-          showToast(`Jumped to today: ${istNow.formattedDate} (IST)`);
-        }}
-        onOpenImportModal={() => {
-          if (userRole === 'viewer') {
-            setIsAdminModalOpen(true);
-          } else {
-            setIsImportModalOpen(true);
-          }
-        }}
-        onExportMasterCsv={() => {
-          if (userRole === 'viewer') {
-            setIsAdminModalOpen(true);
-            return;
-          }
-          exportDatabaseToCSV(db, year);
-        }}
         userRole={userRole}
         onOpenAdminModal={() => setIsAdminModalOpen(true)}
         onOpenPasswordSettings={() => setIsPasswordSettingsOpen(true)}
@@ -313,8 +332,76 @@ export default function App() {
         }}
       />
 
-      {/* Main View Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      {/* Undo Alert Banner for Recent Import */}
+      {backupInfo && (
+        <div className="bg-amber-500 text-slate-950 px-4 py-2 border-b border-amber-600 text-xs font-semibold flex items-center justify-between shadow-xs">
+          <div className="flex items-center gap-2">
+            <RotateCcw className="w-4 h-4 text-slate-950 shrink-0" />
+            <span>
+              <strong>Roster database was recently imported.</strong> Wrong file or merged accidentally? Snapshot from{' '}
+              <span className="font-mono">{backupInfo.formattedTime}</span> ({backupInfo.employeeCount} members) can be restored.
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleUndoImport}
+              className="px-3 py-1 bg-slate-900 hover:bg-black text-white font-bold rounded-md shadow-xs transition-colors flex items-center gap-1 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+              <span>Undo Last Import</span>
+            </button>
+            <button
+              onClick={() => setBackupInfo(null)}
+              className="text-slate-900 hover:text-black p-0.5 font-bold cursor-pointer text-sm"
+              title="Dismiss banner"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main View Area - Fluid responsive width up to 1600px without blank side gutters */}
+      <main className="flex-1 w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* In-Page Operational Action Toolbar (Roster Month, Today IST, Import Excel/CSV, Export DB, Log Leave/Shift) */}
+        <PageActionBar
+          year={year}
+          month={month}
+          onMonthChange={(m) => {
+            setMonth(m);
+            const istNow = getISTDate();
+            if (m === istNow.month) {
+              setSelectedDay(istNow.day);
+            } else {
+              setSelectedDay(1);
+            }
+          }}
+          onJumpToToday={() => {
+            const istNow = getISTDate();
+            setMonth(istNow.month);
+            setSelectedDay(istNow.day);
+            showToast(`Jumped to today: ${istNow.formattedDate} (IST)`);
+          }}
+          onOpenImportModal={() => {
+            if (userRole === 'viewer') {
+              setIsAdminModalOpen(true);
+            } else {
+              setIsImportModalOpen(true);
+            }
+          }}
+          onExportMasterCsv={() => {
+            if (userRole === 'viewer') {
+              setIsAdminModalOpen(true);
+              return;
+            }
+            exportDatabaseToCSV(db, year);
+          }}
+          onOpenLogModal={() => handleOpenAddModal()}
+          userRole={userRole}
+          onOpenAdminModal={() => setIsAdminModalOpen(true)}
+          onUndoImport={handleUndoImport}
+          hasUndoBackup={!!backupInfo}
+        />
         {currentTab === 'dashboard' && (
           <DashboardView
             balances={balances}
@@ -358,6 +445,7 @@ export default function App() {
             onOpenLogModal={handleOpenAddModal}
             userRole={userRole}
             onOpenAdminModal={() => setIsAdminModalOpen(true)}
+            onSyncAllBalances={handleSyncAllBalances}
           />
         )}
 
@@ -403,11 +491,14 @@ export default function App() {
         />
       )}
 
-      {/* Import CSV Modal */}
+      {/* Import Excel / CSV Modal */}
       {isImportModalOpen && (
         <ImportCsvModal
           onClose={() => setIsImportModalOpen(false)}
           onImportSuccess={handleImportSuccess}
+          currentDb={db}
+          backupInfo={backupInfo}
+          onUndoImport={handleUndoImport}
         />
       )}
 
